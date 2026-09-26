@@ -1,0 +1,110 @@
+name: Build AHZA Live Chat
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract project ZIP
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path . -Filter "*.zip" -Recurse |
+                 Select-Object -First 1
+
+          if (-not $zip) {
+            Write-Error "ZIP project tidak ditemukan."
+            exit 1
+          }
+
+          Write-Host "ZIP ditemukan: $($zip.FullName)"
+
+          New-Item -ItemType Directory -Force -Path extracted | Out-Null
+
+          Expand-Archive `
+            -Path $zip.FullName `
+            -DestinationPath extracted `
+            -Force
+
+      - name: Locate Android project
+        shell: pwsh
+        run: |
+          $android = Get-ChildItem `
+            -Path extracted `
+            -Directory `
+            -Recurse |
+            Where-Object { Test-Path "$($_.FullName)\settings.gradle" } |
+            Select-Object -First 1
+
+          if (-not $android) {
+            Write-Error "Project Android tidak ditemukan."
+            exit 1
+          }
+
+          "ANDROID_DIR=$($android.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Android: $($android.FullName)"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
+
+      - name: Build Android APK
+        shell: pwsh
+        run: |
+          gradle -p "$env:ANDROID_DIR" assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AHZA-Live-Chat-Android
+          path: |
+            extracted/**/app/build/outputs/apk/debug/*.apk
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Locate Windows project
+        shell: pwsh
+        run: |
+          $project = Get-ChildItem `
+            -Path extracted `
+            -Filter "*.csproj" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $project) {
+            Write-Error "Project Windows (.csproj) tidak ditemukan."
+            exit 1
+          }
+
+          "WINDOWS_PROJECT=$($project.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Windows: $($project.FullName)"
+
+      - name: Build Windows EXE
+        shell: pwsh
+        run: |
+          dotnet publish "$env:WINDOWS_PROJECT" `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -o "$env:GITHUB_WORKSPACE\windows-build"
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: AHZA-Live-Chat-Windows
+          path: windows-build/**
